@@ -3,21 +3,24 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
+const base = '/Turjeman-farm-/'
+
 export default defineConfig({
+  base,
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon-32x32.png', 'apple-touch-icon.png'],
       manifest: {
-        id: '/',
+        id: base,
         name: "משק תורג'מן - יומן עבודה",
         short_name: "משק תורג'מן",
         description: "יומן עבודה יומי - משק תורג'מן",
         lang: 'he',
         dir: 'rtl',
-        start_url: '/',
-        scope: '/',
+        start_url: base,
+        scope: base,
         display: 'standalone',
         orientation: 'portrait',
         background_color: '#ffffff',

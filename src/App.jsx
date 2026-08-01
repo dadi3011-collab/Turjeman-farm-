@@ -147,6 +147,27 @@ function buildDayMailto(farmName, currentDate, log, totalWorkers) {
   return `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+function dataUrlToFile(dataUrl, filename) {
+  const [header, base64] = dataUrl.split(",");
+  const mimeMatch = header.match(/data:(.*);base64/);
+  const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], filename, { type: mime });
+}
+
+function canShareWithPhotos() {
+  return typeof navigator !== "undefined" && !!navigator.share && !!navigator.canShare;
+}
+
+async function shareWithPhotos(subject, body, photos) {
+  const files = photos.map((src, i) => dataUrlToFile(src, `תמונה-${i + 1}.jpg`));
+  if (!navigator.canShare({ files })) return false;
+  await navigator.share({ title: subject, text: body, files });
+  return true;
+}
+
 function copyToClipboard(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     return navigator.clipboard.writeText(text);
@@ -464,6 +485,33 @@ function DailyLogView({
           >
             📋 העתק את יומן היום למייל
           </button>
+          {(log.generalPhotos || []).length > 0 && canShareWithPhotos() && (
+            <button
+              style={styles.copyBtn}
+              onClick={async () => {
+                const { subject, body } = buildDayReportText(
+                  farmName,
+                  currentDate,
+                  log,
+                  totalWorkers
+                );
+                try {
+                  const shared = await shareWithPhotos(subject, body, log.generalPhotos);
+                  if (!shared) {
+                    setCopyMsg("שיתוף עם תמונות לא נתמך במכשיר זה");
+                    setTimeout(() => setCopyMsg(""), 4000);
+                  }
+                } catch (err) {
+                  if (err && err.name !== "AbortError") {
+                    setCopyMsg("⚠ השיתוף נכשל, נסה שוב");
+                    setTimeout(() => setCopyMsg(""), 4000);
+                  }
+                }
+              }}
+            >
+              📎 שתף כולל תמונות (למייל / וואטסאפ)
+            </button>
+          )}
           <a
             style={styles.mailtoLink}
             href={buildDayMailto(farmName, currentDate, log, totalWorkers)}
@@ -1053,6 +1101,35 @@ function ReportsView({ farmName }) {
             >
               📋 העתק דוח למייל
             </button>
+            {report.generalEntries.some((e) => (e.photos || []).length > 0) &&
+              canShareWithPhotos() && (
+                <button
+                  style={styles.emailBtn}
+                  onClick={async () => {
+                    const { subject, body } = buildReportText(
+                      report,
+                      farmName,
+                      rangeFrom,
+                      rangeTo
+                    );
+                    const photos = report.generalEntries.flatMap((e) => e.photos || []);
+                    try {
+                      const shared = await shareWithPhotos(subject, body, photos);
+                      if (!shared) {
+                        setCopyMsg("שיתוף עם תמונות לא נתמך במכשיר זה");
+                        setTimeout(() => setCopyMsg(""), 4000);
+                      }
+                    } catch (err) {
+                      if (err && err.name !== "AbortError") {
+                        setCopyMsg("⚠ השיתוף נכשל, נסה שוב");
+                        setTimeout(() => setCopyMsg(""), 4000);
+                      }
+                    }
+                  }}
+                >
+                  📎 שתף כולל תמונות
+                </button>
+              )}
           </div>
           {copyMsg && (
             <div className="no-print" style={styles.copyMsg}>

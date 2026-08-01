@@ -678,8 +678,10 @@ function buildReportCSV(report, farmName, rangeFrom, rangeTo) {
   rows.push(["ממוצע עובדים ליום", report.avgPerDay.toFixed(1)]);
   rows.push([]);
   if (Object.keys(report.subTotals).length) {
-    rows.push(["קבלני משנה", "סה\"כ עובדים"]);
-    Object.entries(report.subTotals).forEach(([name, count]) => rows.push([name, count]));
+    rows.push(["קבלני משנה", "מספר ימים", "סה\"כ עובדים"]);
+    Object.entries(report.subTotals).forEach(([name, count]) =>
+      rows.push([name, report.subDaysCounts[name] || 0, count])
+    );
     rows.push([]);
   }
   if (report.taskList.length) {
@@ -720,7 +722,7 @@ function buildReportText(report, farmName, rangeFrom, rangeTo) {
   if (Object.keys(report.subTotals).length) {
     lines.push("קבלני משנה:");
     Object.entries(report.subTotals).forEach(([name, count]) =>
-      lines.push(`${name}: ${count}`)
+      lines.push(`${name}: ${count} עובדים (${report.subDaysCounts[name] || 0} ימים)`)
     );
     lines.push("");
   }
@@ -828,6 +830,7 @@ function ReportsView({ farmName }) {
       let totalOwn = 0;
       let totalSub = 0;
       const subTotals = {};
+      const subDaysCounts = {};
       const plotCounts = {};
       const tunnelCounts = {};
       const taskList = [];
@@ -836,11 +839,16 @@ function ReportsView({ farmName }) {
 
       days.forEach((day) => {
         totalOwn += Number(day.ownWorkers) || 0;
+        const subNamesToday = new Set();
         (day.subcontractors || []).forEach((s) => {
           const c = Number(s.count) || 0;
           totalSub += c;
           const name = s.name.trim() || "קבלן ללא שם";
           subTotals[name] = (subTotals[name] || 0) + c;
+          if (c > 0 && !subNamesToday.has(name)) {
+            subDaysCounts[name] = (subDaysCounts[name] || 0) + 1;
+            subNamesToday.add(name);
+          }
         });
         (day.tasks || []).forEach((t) => {
           if (!t.description && !t.plot && !t.tunnel && !t.notes) return;
@@ -864,6 +872,7 @@ function ReportsView({ farmName }) {
         totalWorkerDays: totalOwn + totalSub,
         avgPerDay: days.length ? (totalOwn + totalSub) / days.length : 0,
         subTotals,
+        subDaysCounts,
         plotCounts,
         tunnelCounts,
         taskList,
@@ -992,6 +1001,7 @@ function ReportsView({ farmName }) {
                 <thead>
                   <tr>
                     <th style={styles.th}>קבלן</th>
+                    <th style={styles.th}>מספר ימים</th>
                     <th style={styles.th}>סה״כ עובדים</th>
                   </tr>
                 </thead>
@@ -999,6 +1009,7 @@ function ReportsView({ farmName }) {
                   {Object.entries(report.subTotals).map(([name, count]) => (
                     <tr key={name}>
                       <td style={styles.td}>{name}</td>
+                      <td style={styles.td}>{report.subDaysCounts[name] || 0}</td>
                       <td style={styles.td}>{count}</td>
                     </tr>
                   ))}

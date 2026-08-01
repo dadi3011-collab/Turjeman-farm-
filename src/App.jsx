@@ -61,6 +61,36 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+function compressImageFile(file, maxDim = 1280, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("שגיאה בטעינת התמונה"));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width >= height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 const emptyLog = () => ({
   ownWorkers: 0,
   subcontractors: [],
@@ -69,6 +99,7 @@ const emptyLog = () => ({
   tasks: [],
   irrigationNotes: "",
   generalNotes: "",
+  generalPhotos: [],
 });
 
 function buildDayReportText(farmName, currentDate, log, totalWorkers) {
@@ -101,9 +132,12 @@ function buildDayReportText(farmName, currentDate, log, totalWorkers) {
     lines.push(log.irrigationNotes.trim());
     lines.push("");
   }
-  if (log.generalNotes && log.generalNotes.trim()) {
+  if ((log.generalNotes && log.generalNotes.trim()) || (log.generalPhotos || []).length) {
     lines.push("הערות כלליות:");
-    lines.push(log.generalNotes.trim());
+    if (log.generalNotes && log.generalNotes.trim()) lines.push(log.generalNotes.trim());
+    if ((log.generalPhotos || []).length) {
+      lines.push(`(${log.generalPhotos.length} תמונות מצורפות באפליקציה)`);
+    }
   }
   return { subject, body: lines.join("\n") };
 }
@@ -597,6 +631,46 @@ function DailyLogView({
               value={log.generalNotes}
               onChange={(e) => updateLog({ generalNotes: e.target.value })}
             />
+            {(log.generalPhotos || []).length > 0 && (
+              <div style={styles.photoGrid}>
+                {log.generalPhotos.map((src, i) => (
+                  <div key={i} style={styles.photoThumbWrap}>
+                    <img src={src} alt={`תמונה ${i + 1}`} style={styles.photoThumb} />
+                    <button
+                      style={styles.photoRemoveBtn}
+                      onClick={() =>
+                        updateLog({
+                          generalPhotos: log.generalPhotos.filter((_, idx) => idx !== i),
+                        })
+                      }
+                      aria-label="הסר תמונה"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label style={styles.addPhotoBtn}>
+              + הוסף תמונה
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const files = Array.from(e.target.files || []);
+                  e.target.value = "";
+                  if (!files.length) return;
+                  try {
+                    const compressed = await Promise.all(files.map((f) => compressImageFile(f)));
+                    updateLog({ generalPhotos: [...(log.generalPhotos || []), ...compressed] });
+                  } catch (err) {
+                    alert("שגיאה בהוספת התמונה");
+                  }
+                }}
+              />
+            </label>
           </Card>
         </div>
       )}
@@ -699,9 +773,9 @@ function buildReportCSV(report, farmName, rangeFrom, rangeTo) {
     rows.push([]);
   }
   if (report.generalEntries.length) {
-    rows.push(["הערות כלליות"]);
+    rows.push(["תאריך", "הערות כלליות", "מספר תמונות מצורפות"]);
     report.generalEntries.forEach((e) =>
-      rows.push([fmtDateShort(parseDateKey(e.date)), e.text])
+      rows.push([fmtDateShort(parseDateKey(e.date)), e.text, (e.photos || []).length])
     );
   }
   const csv = rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
@@ -749,7 +823,11 @@ function buildReportText(report, farmName, rangeFrom, rangeTo) {
   if (report.generalEntries.length) {
     lines.push("הערות כלליות:");
     report.generalEntries.forEach((e) =>
-      lines.push(`${fmtDateShort(parseDateKey(e.date))}: ${e.text}`)
+      lines.push(
+        `${fmtDateShort(parseDateKey(e.date))}: ${e.text}${
+          e.photos && e.photos.length ? ` (${e.photos.length} תמונות מצורפות באפליקציה)` : ""
+        }`
+      )
     );
   }
   return { subject, body: lines.join("\n") };
@@ -859,8 +937,12 @@ function ReportsView({ farmName }) {
         if (day.irrigationNotes && day.irrigationNotes.trim()) {
           irrigationEntries.push({ date: day.date, text: day.irrigationNotes });
         }
-        if (day.generalNotes && day.generalNotes.trim()) {
-          generalEntries.push({ date: day.date, text: day.generalNotes });
+        if ((day.generalNotes && day.generalNotes.trim()) || (day.generalPhotos || []).length) {
+          generalEntries.push({
+            date: day.date,
+            text: day.generalNotes || "",
+            photos: day.generalPhotos || [],
+          });
         }
       });
 
@@ -1085,9 +1167,23 @@ function ReportsView({ farmName }) {
           {report.generalEntries.length > 0 && (
             <ReportSection title="הערות כלליות">
               {report.generalEntries.map((e, i) => (
-                <div key={i} style={styles.noteEntry}>
-                  <span style={styles.noteDate}>{fmtDateShort(parseDateKey(e.date))}</span>
-                  <span>{e.text}</span>
+                <div key={i} style={{ padding: "6px 0", borderBottom: "1px dashed #E7E4DB" }}>
+                  <div style={styles.noteEntry}>
+                    <span style={styles.noteDate}>{fmtDateShort(parseDateKey(e.date))}</span>
+                    <span>{e.text}</span>
+                  </div>
+                  {(e.photos || []).length > 0 && (
+                    <div style={styles.photoGrid}>
+                      {e.photos.map((src, pi) => (
+                        <img
+                          key={pi}
+                          src={src}
+                          alt={`תמונה ${pi + 1}`}
+                          style={styles.photoThumb}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </ReportSection>
@@ -1420,6 +1516,54 @@ const styles = {
     color: "#5A5A54",
     fontSize: 13.5,
     fontWeight: 500,
+  },
+  addPhotoBtn: {
+    marginTop: 10,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+    padding: "10px 0",
+    borderRadius: 8,
+    border: "1.5px dashed #B9AE8E",
+    background: "transparent",
+    color: "#5A5A54",
+    fontSize: 13.5,
+    fontWeight: 500,
+    cursor: "pointer",
+  },
+  photoGrid: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 10,
+  },
+  photoThumbWrap: {
+    position: "relative",
+    width: 84,
+    height: 84,
+  },
+  photoThumb: {
+    width: 84,
+    height: 84,
+    objectFit: "cover",
+    borderRadius: 8,
+    border: "1.5px solid #E4E1D8",
+    display: "block",
+  },
+  photoRemoveBtn: {
+    position: "absolute",
+    top: -6,
+    insetInlineEnd: -6,
+    width: 22,
+    height: 22,
+    borderRadius: "50%",
+    border: "1px solid #E3B9AE",
+    background: "#F7EAE6",
+    color: "#D6402C",
+    fontSize: 11,
+    lineHeight: "20px",
+    padding: 0,
   },
   taskRow: {
     background: "#F7F5F0",

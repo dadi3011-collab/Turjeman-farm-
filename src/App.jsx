@@ -168,6 +168,51 @@ async function shareWithPhotos(subject, body, photos) {
   return true;
 }
 
+async function elementToPdfFile(element, filename) {
+  const [{ jsPDF }, { default: html2canvas }] = await Promise.all([
+    import("jspdf"),
+    import("html2canvas"),
+  ]);
+  const canvas = await html2canvas(element, {
+    scale: 2,
+    backgroundColor: "#ffffff",
+    onclone: (clonedDoc) => {
+      clonedDoc.querySelectorAll(".no-print").forEach((el) => {
+        el.style.display = "none";
+      });
+    },
+  });
+  const imgData = canvas.toDataURL("image/jpeg", 0.92);
+  const pdf = new jsPDF({ unit: "pt", format: "a4" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const imgWidth = pageWidth;
+  const imgHeight = (canvas.height * imgWidth) / canvas.width;
+  let heightLeft = imgHeight;
+  let position = 0;
+  pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+  heightLeft -= pageHeight;
+  while (heightLeft > 0) {
+    position = heightLeft - imgHeight;
+    pdf.addPage();
+    pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+    heightLeft -= pageHeight;
+  }
+  const blob = pdf.output("blob");
+  return new File([blob], filename, { type: "application/pdf" });
+}
+
+function downloadFile(file) {
+  const url = URL.createObjectURL(file);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = file.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 function copyToClipboard(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     return navigator.clipboard.writeText(text);
@@ -925,6 +970,8 @@ function ReportsView({ farmName }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [copyMsg, setCopyMsg] = useState("");
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const printAreaRef = useRef(null);
 
   async function generateReport() {
     setLoading(true);
@@ -1055,8 +1102,9 @@ function ReportsView({ farmName }) {
       </div>
 
       {report && (
-        <div style={styles.reportPrintArea}>
+        <div style={styles.reportPrintArea} ref={printAreaRef}>
           <div style={styles.reportPrintHeader}>
+            <img src={LOGO_SRC} alt={farmName} style={styles.reportPrintLogo} />
             <div style={styles.reportPrintTitle}>{farmName} — דוח מסכם</div>
             <div style={styles.reportPrintSub}>
               {rangeFrom} עד {rangeTo} · {report.daysCount} ימים מתועדים
@@ -1130,6 +1178,32 @@ function ReportsView({ farmName }) {
                   📎 שתף כולל תמונות
                 </button>
               )}
+            <button
+              style={styles.emailBtn}
+              disabled={pdfBusy}
+              onClick={async () => {
+                if (!printAreaRef.current) return;
+                setPdfBusy(true);
+                try {
+                  const filename = `דוח-${rangeFrom}-עד-${rangeTo}.pdf`;
+                  const file = await elementToPdfFile(printAreaRef.current, filename);
+                  if (canShareWithPhotos() && navigator.canShare({ files: [file] })) {
+                    await navigator.share({ title: `${farmName} — דוח מסכם`, files: [file] });
+                  } else {
+                    downloadFile(file);
+                  }
+                } catch (err) {
+                  if (err && err.name !== "AbortError") {
+                    setCopyMsg("⚠ יצירת ה-PDF נכשלה, נסה שוב");
+                    setTimeout(() => setCopyMsg(""), 4000);
+                  }
+                } finally {
+                  setPdfBusy(false);
+                }
+              }}
+            >
+              {pdfBusy ? "מכין PDF…" : "📄 שלח כ-PDF"}
+            </button>
           </div>
           {copyMsg && (
             <div className="no-print" style={styles.copyMsg}>
@@ -1712,6 +1786,7 @@ const styles = {
   },
   reportPrintArea: { marginTop: 16 },
   reportPrintHeader: { textAlign: "center", marginBottom: 14 },
+  reportPrintLogo: { height: 64, marginBottom: 8 },
   reportPrintTitle: {
     fontFamily: "'Heebo', sans-serif",
     fontWeight: 900,

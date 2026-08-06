@@ -57,6 +57,15 @@ function fmtDateShort(d) {
 function isSameDay(a, b) {
   return fmtDateKey(a) === fmtDateKey(b);
 }
+function calcWorkHours(start, end) {
+  if (!start || !end) return null;
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  if ([sh, sm, eh, em].some((n) => Number.isNaN(n))) return null;
+  let mins = eh * 60 + em - (sh * 60 + sm);
+  if (mins < 0) mins += 24 * 60;
+  return mins / 60;
+}
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -844,6 +853,33 @@ function buildReportCSV(report, farmName, rangeFrom, rangeTo) {
   rows.push(["סה\"כ ימי עבודה - קבלנים", report.totalSub]);
   rows.push(["ממוצע עובדים ליום", report.avgPerDay.toFixed(1)]);
   rows.push([]);
+  if (report.days.length) {
+    rows.push([
+      "תאריך",
+      "עובדי משק",
+      "קבלני משנה",
+      "סה\"כ עובדים",
+      "שעות עבודה",
+      "סה\"כ שעות",
+    ]);
+    report.days.forEach((day) => {
+      const ownWorkers = Number(day.ownWorkers) || 0;
+      const subs = (day.subcontractors || []).filter((s) => (Number(s.count) || 0) > 0);
+      const subTotal = subs.reduce((sum, s) => sum + (Number(s.count) || 0), 0);
+      const hours = calcWorkHours(day.workStart, day.workEnd);
+      rows.push([
+        fmtDateShort(parseDateKey(day.date)),
+        ownWorkers,
+        subs.length
+          ? subs.map((s) => `${s.name || "קבלן ללא שם"} (${s.count || 0})`).join("; ")
+          : "-",
+        ownWorkers + subTotal,
+        `${day.workStart || "-"} עד ${day.workEnd || "-"}`,
+        hours !== null ? hours.toFixed(1) : "-",
+      ]);
+    });
+    rows.push([]);
+  }
   if (Object.keys(report.subTotals).length) {
     rows.push(["קבלני משנה", "מספר ימים", "סה\"כ עובדים"]);
     Object.entries(report.subTotals).forEach(([name, count]) =>
@@ -886,6 +922,26 @@ function buildReportText(report, farmName, rangeFrom, rangeTo) {
   lines.push(`סה"כ ימי עבודה - קבלנים: ${report.totalSub}`);
   lines.push(`ממוצע עובדים ליום: ${report.avgPerDay.toFixed(1)}`);
   lines.push("");
+  if (report.days.length) {
+    lines.push("נוכחות ושעות עבודה לפי תאריך:");
+    report.days.forEach((day) => {
+      const ownWorkers = Number(day.ownWorkers) || 0;
+      const subs = (day.subcontractors || []).filter((s) => (Number(s.count) || 0) > 0);
+      const subTotal = subs.reduce((sum, s) => sum + (Number(s.count) || 0), 0);
+      const hours = calcWorkHours(day.workStart, day.workEnd);
+      const subsText = subs.length
+        ? subs.map((s) => `${s.name || "קבלן ללא שם"} (${s.count || 0})`).join(", ")
+        : "-";
+      lines.push(
+        `${fmtDateShort(parseDateKey(day.date))} - עובדי משק: ${ownWorkers} | קבלנים: ${subsText} | סה"כ עובדים: ${
+          ownWorkers + subTotal
+        } | שעות: ${day.workStart || "-"} עד ${day.workEnd || "-"} (${
+          hours !== null ? hours.toFixed(1) : "-"
+        } שעות)`
+      );
+    });
+    lines.push("");
+  }
   if (Object.keys(report.subTotals).length) {
     lines.push("קבלני משנה:");
     Object.entries(report.subTotals).forEach(([name, count]) =>
@@ -1227,6 +1283,51 @@ function ReportsView({ farmName }) {
               value={report.avgPerDay ? report.avgPerDay.toFixed(1) : "0"}
             />
           </div>
+
+          {report.days.length > 0 && (
+            <ReportSection title="נוכחות ושעות עבודה לפי תאריך">
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>תאריך</th>
+                    <th style={styles.th}>עובדי משק</th>
+                    <th style={styles.th}>קבלני משנה</th>
+                    <th style={styles.th}>סה״כ עובדים</th>
+                    <th style={styles.th}>שעות עבודה</th>
+                    <th style={styles.th}>סה״כ שעות</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.days.map((day) => {
+                    const ownWorkers = Number(day.ownWorkers) || 0;
+                    const subs = (day.subcontractors || []).filter(
+                      (s) => (Number(s.count) || 0) > 0
+                    );
+                    const subTotal = subs.reduce((sum, s) => sum + (Number(s.count) || 0), 0);
+                    const hours = calcWorkHours(day.workStart, day.workEnd);
+                    return (
+                      <tr key={day.date}>
+                        <td style={styles.td}>{fmtDateShort(parseDateKey(day.date))}</td>
+                        <td style={styles.td}>{ownWorkers}</td>
+                        <td style={styles.td}>
+                          {subs.length
+                            ? subs
+                                .map((s) => `${s.name || "קבלן ללא שם"} (${s.count || 0})`)
+                                .join(", ")
+                            : "-"}
+                        </td>
+                        <td style={styles.td}>{ownWorkers + subTotal}</td>
+                        <td style={styles.td}>
+                          {day.workStart || "-"} עד {day.workEnd || "-"}
+                        </td>
+                        <td style={styles.td}>{hours !== null ? hours.toFixed(1) : "-"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </ReportSection>
+          )}
 
           {Object.keys(report.subTotals).length > 0 && (
             <ReportSection title="קבלני משנה — סה״כ ימי־עבודה">

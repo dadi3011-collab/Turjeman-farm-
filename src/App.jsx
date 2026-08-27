@@ -247,7 +247,7 @@ function copyToClipboard(text) {
 export default function FarmDailyLog() {
   const [farmName, setFarmName] = useState("משק תורג'מן");
   const [editingName, setEditingName] = useState(false);
-  const [activeTab, setActiveTab] = useState("log"); // 'log' | 'reports'
+  const [activeTab, setActiveTab] = useState("log"); // 'log' | 'reports' | 'invoices'
   const [currentDate, setCurrentDate] = useState(new Date());
   const [log, setLog] = useState(emptyLog());
   const [loading, setLoading] = useState(true);
@@ -410,6 +410,15 @@ export default function FarmDailyLog() {
           >
             דוחות
           </button>
+          <button
+            style={{
+              ...styles.tabBtn,
+              ...(activeTab === "invoices" ? styles.tabBtnActive : {}),
+            }}
+            onClick={() => setActiveTab("invoices")}
+          >
+            חשבוניות
+          </button>
         </div>
 
         {activeTab === "log" ? (
@@ -433,8 +442,10 @@ export default function FarmDailyLog() {
             farmName={farmName}
             saveNow={saveNow}
           />
-        ) : (
+        ) : activeTab === "reports" ? (
           <ReportsView farmName={farmName} />
+        ) : (
+          <InvoicesView />
         )}
         <div style={{ height: 24 }} />
       </div>
@@ -1001,10 +1012,16 @@ async function exportFullBackup(farmName) {
     })
   );
   const logs = Object.fromEntries(entries.filter(([, v]) => v));
+  let invoices = [];
+  try {
+    const invRes = await storage.get("invoices");
+    invoices = invRes && invRes.value ? JSON.parse(invRes.value) : [];
+  } catch (e) {}
   const backup = {
     farmName,
     exportedAt: new Date().toISOString(),
     logs,
+    invoices,
   };
   downloadBlob(
     JSON.stringify(backup, null, 2),
@@ -1450,6 +1467,172 @@ function ReportsView({ farmName }) {
   );
 }
 
+function InvoicesView() {
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("all"); // all | unpaid | paid
+  const [viewerSrc, setViewerSrc] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("invoices");
+        setInvoices(res && res.value ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setInvoices([]);
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  function persist(next) {
+    setInvoices(next);
+    storage.set("invoices", JSON.stringify(next)).catch(() => {});
+  }
+
+  async function handleAddFiles(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setBusy(true);
+    try {
+      const compressed = await Promise.all(files.map((f) => compressImageFile(f)));
+      const today = fmtDateKey(new Date());
+      const newItems = compressed.map((photo) => ({
+        id: uid(),
+        photo,
+        date: today,
+        note: "",
+        paid: false,
+      }));
+      persist([...newItems, ...invoices]);
+    } catch (err) {
+      alert("שגיאה בהוספת החשבונית");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function updateInvoice(id, patch) {
+    persist(invoices.map((inv) => (inv.id === id ? { ...inv, ...patch } : inv)));
+  }
+
+  function removeInvoice(id) {
+    if (!window.confirm("למחוק את החשבונית?")) return;
+    persist(invoices.filter((inv) => inv.id !== id));
+  }
+
+  const sorted = [...invoices].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const filtered = sorted.filter((inv) => {
+    if (filter === "unpaid") return !inv.paid;
+    if (filter === "paid") return !!inv.paid;
+    return true;
+  });
+  const unpaidCount = invoices.filter((inv) => !inv.paid).length;
+
+  return (
+    <div style={styles.cardsWrap}>
+      <Card title="חשבוניות" icon="🧾" accent="#B9770E">
+        <div style={styles.mutedNote}>
+          {invoices.length === 0
+            ? "אין חשבוניות רשומות"
+            : `סה״כ ${invoices.length} חשבוניות · ${unpaidCount} לא שולמו`}
+        </div>
+        <label style={styles.addPhotoBtn}>
+          {busy ? "מעלה…" : "+ הוסף חשבונית (צילום)"}
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            multiple
+            style={{ display: "none" }}
+            disabled={busy}
+            onChange={handleAddFiles}
+          />
+        </label>
+      </Card>
+
+      {invoices.length > 0 && (
+        <div className="no-print" style={styles.filterBar}>
+          {[
+            ["all", "הכל"],
+            ["unpaid", "לא שולמו"],
+            ["paid", "שולמו"],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              style={{
+                ...styles.filterBtn,
+                ...(filter === key ? styles.filterBtnActive : {}),
+              }}
+              onClick={() => setFilter(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={styles.emptyState}>טוען…</div>
+      ) : filtered.length === 0 ? (
+        <div style={styles.emptyState}>
+          {invoices.length === 0 ? "עדיין לא הועלו חשבוניות" : "אין חשבוניות בסינון הנוכחי"}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {filtered.map((inv) => (
+            <div key={inv.id} style={styles.invoiceCard}>
+              <img
+                src={inv.photo}
+                alt="חשבונית"
+                style={styles.invoiceThumb}
+                onClick={() => setViewerSrc(inv.photo)}
+              />
+              <div style={styles.invoiceDetailCol}>
+                <input
+                  type="date"
+                  style={styles.invoiceDateInput}
+                  value={inv.date}
+                  onChange={(e) => updateInvoice(inv.id, { date: e.target.value })}
+                />
+                <input
+                  style={styles.invoiceNoteInput}
+                  placeholder="ספק / סכום / הערה"
+                  value={inv.note}
+                  onChange={(e) => updateInvoice(inv.id, { note: e.target.value })}
+                />
+                <div style={styles.invoiceActionsRow}>
+                  <button
+                    style={inv.paid ? styles.paidBtnPaid : styles.paidBtnUnpaid}
+                    onClick={() => updateInvoice(inv.id, { paid: !inv.paid })}
+                  >
+                    {inv.paid ? "✓ שולם" : "✗ לא שולם"}
+                  </button>
+                  <button
+                    style={styles.iconDelete}
+                    onClick={() => removeInvoice(inv.id)}
+                    aria-label="מחק חשבונית"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {viewerSrc && (
+        <div style={styles.invoiceViewerOverlay} onClick={() => setViewerSrc(null)}>
+          <img src={viewerSrc} alt="חשבונית" style={styles.invoiceViewerImg} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReportSection({ title, children }) {
   return (
     <div style={styles.reportSection}>
@@ -1816,6 +1999,99 @@ const styles = {
     fontSize: 11,
     lineHeight: "20px",
     padding: 0,
+  },
+  filterBar: { display: "flex", gap: 8 },
+  filterBtn: {
+    flex: 1,
+    padding: "9px 0",
+    borderRadius: 8,
+    border: "1.5px solid #E4E1D8",
+    background: "#FFFDF8",
+    color: "#5A5A54",
+    fontSize: 13.5,
+    fontWeight: 500,
+  },
+  filterBtnActive: {
+    background: "#B9770E",
+    borderColor: "#B9770E",
+    color: "#FFFDF8",
+  },
+  invoiceCard: {
+    display: "flex",
+    gap: 12,
+    background: "#F7F5F0",
+    border: "1px solid #E7E4DB",
+    borderRadius: 10,
+    padding: 10,
+  },
+  invoiceThumb: {
+    width: 90,
+    height: 120,
+    objectFit: "cover",
+    borderRadius: 8,
+    border: "1.5px solid #E4E1D8",
+    flexShrink: 0,
+    cursor: "pointer",
+  },
+  invoiceDetailCol: {
+    flex: 1,
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  invoiceDateInput: {
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1.5px solid #E4E1D8",
+    fontSize: 13.5,
+    background: "#FFFDF8",
+    color: "#1A1A1A",
+  },
+  invoiceNoteInput: {
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1.5px solid #E4E1D8",
+    fontSize: 13.5,
+    background: "#FFFDF8",
+    color: "#1A1A1A",
+  },
+  invoiceActionsRow: { display: "flex", gap: 8, alignItems: "center" },
+  paidBtnPaid: {
+    flex: 1,
+    padding: "9px 0",
+    borderRadius: 8,
+    border: "1.5px solid #3C7A43",
+    background: "#E7F2E8",
+    color: "#3C7A43",
+    fontSize: 13.5,
+    fontWeight: 600,
+  },
+  paidBtnUnpaid: {
+    flex: 1,
+    padding: "9px 0",
+    borderRadius: 8,
+    border: "1.5px solid #E3B9AE",
+    background: "#F7EAE6",
+    color: "#D6402C",
+    fontSize: 13.5,
+    fontWeight: 600,
+  },
+  invoiceViewerOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.85)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000,
+    padding: 20,
+  },
+  invoiceViewerImg: {
+    maxWidth: "100%",
+    maxHeight: "100%",
+    borderRadius: 8,
+    boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
   },
   taskRow: {
     background: "#F7F5F0",

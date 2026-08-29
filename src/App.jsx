@@ -103,6 +103,7 @@ function compressImageFile(file, maxDim = 1280, quality = 0.7) {
 const emptyLog = () => ({
   ownWorkers: 0,
   subcontractors: [],
+  sentOutWorkers: [],
   workStart: "",
   workEnd: "",
   tasks: [],
@@ -123,6 +124,13 @@ function buildDayReportText(farmName, currentDate, log, totalWorkers) {
     lines.push(`${s.name || "קבלן ללא שם"}: ${s.count || 0}`);
   });
   lines.push(`סה"כ עובדים: ${totalWorkers}`);
+  if ((log.sentOutWorkers || []).length) {
+    lines.push("");
+    lines.push("עובדים שיצאו לעבוד אצל קבלן אחר:");
+    log.sentOutWorkers.forEach((s) => {
+      lines.push(`${s.name || "קבלן ללא שם"}: ${s.count || 0}`);
+    });
+  }
   lines.push("");
   lines.push(`שעות עבודה: ${log.workStart || "-"} עד ${log.workEnd || "-"}`);
   lines.push("");
@@ -358,6 +366,25 @@ export default function FarmDailyLog() {
     updateLog({ subcontractors: log.subcontractors.filter((s) => s.id !== id) });
   }
 
+  // ---- sent-out workers (own workers sent to work for another contractor) ----
+  function addSentOutWorker() {
+    updateLog({
+      sentOutWorkers: [...(log.sentOutWorkers || []), { id: uid(), name: "", count: 0 }],
+    });
+  }
+  function updateSentOutWorker(id, patch) {
+    updateLog({
+      sentOutWorkers: (log.sentOutWorkers || []).map((s) =>
+        s.id === id ? { ...s, ...patch } : s
+      ),
+    });
+  }
+  function removeSentOutWorker(id) {
+    updateLog({
+      sentOutWorkers: (log.sentOutWorkers || []).filter((s) => s.id !== id),
+    });
+  }
+
   // ---- tasks ----
   function addTask() {
     updateLog({
@@ -378,6 +405,10 @@ export default function FarmDailyLog() {
     0
   );
   const totalWorkers = (Number(log.ownWorkers) || 0) + subWorkersTotal;
+  const sentOutTotal = (log.sentOutWorkers || []).reduce(
+    (sum, s) => sum + (Number(s.count) || 0),
+    0
+  );
 
   return (
     <div style={styles.page}>
@@ -433,6 +464,10 @@ export default function FarmDailyLog() {
             addSubcontractor={addSubcontractor}
             updateSubcontractor={updateSubcontractor}
             removeSubcontractor={removeSubcontractor}
+            addSentOutWorker={addSentOutWorker}
+            updateSentOutWorker={updateSentOutWorker}
+            removeSentOutWorker={removeSentOutWorker}
+            sentOutTotal={sentOutTotal}
             addTask={addTask}
             updateTask={updateTask}
             removeTask={removeTask}
@@ -472,6 +507,10 @@ function DailyLogView({
   addSubcontractor,
   updateSubcontractor,
   removeSubcontractor,
+  addSentOutWorker,
+  updateSentOutWorker,
+  removeSentOutWorker,
+  sentOutTotal,
   addTask,
   updateTask,
   removeTask,
@@ -643,6 +682,47 @@ function DailyLogView({
             {subWorkersTotal > 0 && (
               <div style={styles.mutedNote}>
                 סה״כ עובדי קבלנים: {subWorkersTotal}
+              </div>
+            )}
+
+            <div style={styles.subDivider}>עובדים שיצאו לעבוד אצל קבלן אחר</div>
+            {(log.sentOutWorkers || []).length === 0 && (
+              <div style={styles.mutedNote}>לא נרשמו עובדים שיצאו ליום זה</div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {(log.sentOutWorkers || []).map((s) => (
+                <div key={s.id} style={styles.subRow}>
+                  <input
+                    style={styles.subNameInput}
+                    placeholder="שם הקבלן / המשק שאצלו עבדו"
+                    value={s.name}
+                    onChange={(e) =>
+                      updateSentOutWorker(s.id, { name: e.target.value })
+                    }
+                  />
+                  <div style={styles.subCountWrap}>
+                    <NumberStepper
+                      compact
+                      value={s.count}
+                      onChange={(v) => updateSentOutWorker(s.id, { count: v })}
+                    />
+                  </div>
+                  <button
+                    style={styles.iconDelete}
+                    onClick={() => removeSentOutWorker(s.id)}
+                    aria-label="מחק רישום"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button style={styles.addRowBtn} onClick={addSentOutWorker}>
+              + הוסף עובדים שיצאו
+            </button>
+            {sentOutTotal > 0 && (
+              <div style={styles.mutedNote}>
+                סה״כ עובדים שיצאו: {sentOutTotal}
               </div>
             )}
           </Card>
@@ -863,12 +943,16 @@ function buildReportCSV(report, farmName, rangeFrom, rangeTo) {
   rows.push(["סה\"כ ימי עבודה - עובדי משק", report.totalOwn]);
   rows.push(["סה\"כ ימי עבודה - קבלנים", report.totalSub]);
   rows.push(["ממוצע עובדים ליום", report.avgPerDay.toFixed(1)]);
+  if (report.totalSentOut > 0) {
+    rows.push(["סה\"כ ימי־עבודה, יצאו לקבלן אחר", report.totalSentOut]);
+  }
   rows.push([]);
   if (report.days.length) {
     rows.push([
       "תאריך",
       "עובדי משק",
       "קבלני משנה",
+      "יצאו לקבלן אחר",
       "סה\"כ עובדים",
       "שעות עבודה",
       "סה\"כ שעות",
@@ -877,12 +961,16 @@ function buildReportCSV(report, farmName, rangeFrom, rangeTo) {
       const ownWorkers = Number(day.ownWorkers) || 0;
       const subs = (day.subcontractors || []).filter((s) => (Number(s.count) || 0) > 0);
       const subTotal = subs.reduce((sum, s) => sum + (Number(s.count) || 0), 0);
+      const sentOut = (day.sentOutWorkers || []).filter((s) => (Number(s.count) || 0) > 0);
       const hours = calcWorkHours(day.workStart, day.workEnd);
       rows.push([
         fmtDateShort(parseDateKey(day.date)),
         ownWorkers,
         subs.length
           ? subs.map((s) => `${s.name || "קבלן ללא שם"} (${s.count || 0})`).join("; ")
+          : "-",
+        sentOut.length
+          ? sentOut.map((s) => `${s.name || "קבלן ללא שם"} (${s.count || 0})`).join("; ")
           : "-",
         ownWorkers + subTotal,
         `${day.workStart || "-"} עד ${day.workEnd || "-"}`,
@@ -895,6 +983,13 @@ function buildReportCSV(report, farmName, rangeFrom, rangeTo) {
     rows.push(["קבלני משנה", "מספר ימים", "סה\"כ עובדים"]);
     Object.entries(report.subTotals).forEach(([name, count]) =>
       rows.push([name, report.subDaysCounts[name] || 0, count])
+    );
+    rows.push([]);
+  }
+  if (Object.keys(report.sentOutTotals).length) {
+    rows.push(["עובדים שיצאו לקבלן אחר", "מספר ימים", "סה\"כ עובדים"]);
+    Object.entries(report.sentOutTotals).forEach(([name, count]) =>
+      rows.push([name, report.sentOutDaysCounts[name] || 0, count])
     );
     rows.push([]);
   }
@@ -932,6 +1027,9 @@ function buildReportText(report, farmName, rangeFrom, rangeTo) {
   lines.push(`סה"כ ימי עבודה - עובדי משק: ${report.totalOwn}`);
   lines.push(`סה"כ ימי עבודה - קבלנים: ${report.totalSub}`);
   lines.push(`ממוצע עובדים ליום: ${report.avgPerDay.toFixed(1)}`);
+  if (report.totalSentOut > 0) {
+    lines.push(`סה"כ ימי־עבודה, יצאו לקבלן אחר: ${report.totalSentOut}`);
+  }
   lines.push("");
   if (report.days.length) {
     lines.push("נוכחות ושעות עבודה לפי תאריך:");
@@ -939,12 +1037,16 @@ function buildReportText(report, farmName, rangeFrom, rangeTo) {
       const ownWorkers = Number(day.ownWorkers) || 0;
       const subs = (day.subcontractors || []).filter((s) => (Number(s.count) || 0) > 0);
       const subTotal = subs.reduce((sum, s) => sum + (Number(s.count) || 0), 0);
+      const sentOut = (day.sentOutWorkers || []).filter((s) => (Number(s.count) || 0) > 0);
       const hours = calcWorkHours(day.workStart, day.workEnd);
       const subsText = subs.length
         ? subs.map((s) => `${s.name || "קבלן ללא שם"} (${s.count || 0})`).join(", ")
         : "-";
+      const sentOutText = sentOut.length
+        ? sentOut.map((s) => `${s.name || "קבלן ללא שם"} (${s.count || 0})`).join(", ")
+        : "-";
       lines.push(
-        `${fmtDateShort(parseDateKey(day.date))} - עובדי משק: ${ownWorkers} | קבלנים: ${subsText} | סה"כ עובדים: ${
+        `${fmtDateShort(parseDateKey(day.date))} - עובדי משק: ${ownWorkers} | קבלנים: ${subsText} | יצאו לקבלן אחר: ${sentOutText} | סה"כ עובדים: ${
           ownWorkers + subTotal
         } | שעות: ${day.workStart || "-"} עד ${day.workEnd || "-"} (${
           hours !== null ? hours.toFixed(1) : "-"
@@ -957,6 +1059,13 @@ function buildReportText(report, farmName, rangeFrom, rangeTo) {
     lines.push("קבלני משנה:");
     Object.entries(report.subTotals).forEach(([name, count]) =>
       lines.push(`${name}: ${count} עובדים (${report.subDaysCounts[name] || 0} ימים)`)
+    );
+    lines.push("");
+  }
+  if (Object.keys(report.sentOutTotals).length) {
+    lines.push("עובדים שיצאו לעבודה אצל קבלן אחר:");
+    Object.entries(report.sentOutTotals).forEach(([name, count]) =>
+      lines.push(`${name}: ${count} עובדים (${report.sentOutDaysCounts[name] || 0} ימים)`)
     );
     lines.push("");
   }
@@ -1075,8 +1184,11 @@ function ReportsView({ farmName }) {
 
       let totalOwn = 0;
       let totalSub = 0;
+      let totalSentOut = 0;
       const subTotals = {};
       const subDaysCounts = {};
+      const sentOutTotals = {};
+      const sentOutDaysCounts = {};
       const plotCounts = {};
       const tunnelCounts = {};
       const taskList = [];
@@ -1094,6 +1206,17 @@ function ReportsView({ farmName }) {
           if (c > 0 && !subNamesToday.has(name)) {
             subDaysCounts[name] = (subDaysCounts[name] || 0) + 1;
             subNamesToday.add(name);
+          }
+        });
+        const sentOutNamesToday = new Set();
+        (day.sentOutWorkers || []).forEach((s) => {
+          const c = Number(s.count) || 0;
+          totalSentOut += c;
+          const name = s.name.trim() || "קבלן ללא שם";
+          sentOutTotals[name] = (sentOutTotals[name] || 0) + c;
+          if (c > 0 && !sentOutNamesToday.has(name)) {
+            sentOutDaysCounts[name] = (sentOutDaysCounts[name] || 0) + 1;
+            sentOutNamesToday.add(name);
           }
         });
         (day.tasks || []).forEach((t) => {
@@ -1119,10 +1242,13 @@ function ReportsView({ farmName }) {
         daysCount: days.length,
         totalOwn,
         totalSub,
+        totalSentOut,
         totalWorkerDays: totalOwn + totalSub,
         avgPerDay: days.length ? (totalOwn + totalSub) / days.length : 0,
         subTotals,
         subDaysCounts,
+        sentOutTotals,
+        sentOutDaysCounts,
         plotCounts,
         tunnelCounts,
         taskList,
@@ -1299,6 +1425,12 @@ function ReportsView({ farmName }) {
               label="ממוצע עובדים ליום"
               value={report.avgPerDay ? report.avgPerDay.toFixed(1) : "0"}
             />
+            {report.totalSentOut > 0 && (
+              <StatBox
+                label="סה״כ ימי־עבודה, יצאו לקבלן אחר"
+                value={report.totalSentOut}
+              />
+            )}
           </div>
 
           {report.days.length > 0 && (
@@ -1309,6 +1441,7 @@ function ReportsView({ farmName }) {
                     <th style={styles.th}>תאריך</th>
                     <th style={styles.th}>עובדי משק</th>
                     <th style={styles.th}>קבלני משנה</th>
+                    <th style={styles.th}>יצאו לקבלן אחר</th>
                     <th style={styles.th}>סה״כ עובדים</th>
                     <th style={styles.th}>שעות עבודה</th>
                     <th style={styles.th}>סה״כ שעות</th>
@@ -1321,6 +1454,9 @@ function ReportsView({ farmName }) {
                       (s) => (Number(s.count) || 0) > 0
                     );
                     const subTotal = subs.reduce((sum, s) => sum + (Number(s.count) || 0), 0);
+                    const sentOut = (day.sentOutWorkers || []).filter(
+                      (s) => (Number(s.count) || 0) > 0
+                    );
                     const hours = calcWorkHours(day.workStart, day.workEnd);
                     return (
                       <tr key={day.date}>
@@ -1329,6 +1465,13 @@ function ReportsView({ farmName }) {
                         <td style={styles.td}>
                           {subs.length
                             ? subs
+                                .map((s) => `${s.name || "קבלן ללא שם"} (${s.count || 0})`)
+                                .join(", ")
+                            : "-"}
+                        </td>
+                        <td style={styles.td}>
+                          {sentOut.length
+                            ? sentOut
                                 .map((s) => `${s.name || "קבלן ללא שם"} (${s.count || 0})`)
                                 .join(", ")
                             : "-"}
@@ -1361,6 +1504,29 @@ function ReportsView({ farmName }) {
                     <tr key={name}>
                       <td style={styles.td}>{name}</td>
                       <td style={styles.td}>{report.subDaysCounts[name] || 0}</td>
+                      <td style={styles.td}>{count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </ReportSection>
+          )}
+
+          {Object.keys(report.sentOutTotals).length > 0 && (
+            <ReportSection title="עובדים שיצאו לעבודה אצל קבלן אחר — סה״כ ימי־עבודה">
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>קבלן / משק</th>
+                    <th style={styles.th}>מספר ימים</th>
+                    <th style={styles.th}>סה״כ עובדים</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(report.sentOutTotals).map(([name, count]) => (
+                    <tr key={name}>
+                      <td style={styles.td}>{name}</td>
+                      <td style={styles.td}>{report.sentOutDaysCounts[name] || 0}</td>
                       <td style={styles.td}>{count}</td>
                     </tr>
                   ))}

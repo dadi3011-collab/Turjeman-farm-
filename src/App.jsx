@@ -111,6 +111,57 @@ function readFileAsDataURL(file) {
 
 const INVOICE_FOLDER_SUGGESTIONS = ["שתילים"];
 
+const SHARE_TARGET_CACHE = "share-target-temp-v1";
+
+function hasSharedFilesPending() {
+  return typeof window !== "undefined" && window.location.search.includes("share-target=1");
+}
+
+async function consumeSharedFiles() {
+  if (!("caches" in window)) return [];
+  try {
+    const cache = await caches.open(SHARE_TARGET_CACHE);
+    const payloadRes = await cache.match("share-payload");
+    if (!payloadRes) return [];
+    const { fileCount = 0 } = await payloadRes.json();
+    const files = [];
+    for (let i = 0; i < fileCount; i++) {
+      const key = `share-file-${i}`;
+      const res = await cache.match(key);
+      if (res) {
+        const blob = await res.blob();
+        const filename = decodeURIComponent(res.headers.get("x-filename") || `shared-${i}`);
+        files.push(new File([blob], filename, { type: blob.type }));
+        await cache.delete(key);
+      }
+    }
+    await cache.delete("share-payload");
+    return files;
+  } catch (e) {
+    return [];
+  }
+}
+
+async function buildInvoiceItemsFromFiles(files, folder) {
+  const today = fmtDateKey(new Date());
+  return Promise.all(
+    files.map(async (f) => {
+      const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+      const photo = isPdf ? await readFileAsDataURL(f) : await compressImageFile(f);
+      return {
+        id: uid(),
+        type: isPdf ? "pdf" : "image",
+        fileName: isPdf ? f.name : "",
+        photo,
+        date: today,
+        note: "",
+        folder: folder || "",
+        paid: false,
+      };
+    })
+  );
+}
+
 const emptyLog = () => ({
   ownWorkers: 0,
   subcontractors: [],
@@ -266,7 +317,9 @@ function copyToClipboard(text) {
 export default function FarmDailyLog() {
   const [farmName, setFarmName] = useState("משק תורג'מן");
   const [editingName, setEditingName] = useState(false);
-  const [activeTab, setActiveTab] = useState("log"); // 'log' | 'reports' | 'invoices'
+  const [activeTab, setActiveTab] = useState(() =>
+    hasSharedFilesPending() ? "invoices" : "log"
+  ); // 'log' | 'reports' | 'invoices'
   const [currentDate, setCurrentDate] = useState(new Date());
   const [log, setLog] = useState(emptyLog());
   const [loading, setLoading] = useState(true);
@@ -1654,13 +1707,35 @@ function InvoicesView() {
 
   useEffect(() => {
     (async () => {
+      let loaded = [];
       try {
         const res = await storage.get("invoices");
-        setInvoices(res && res.value ? JSON.parse(res.value) : []);
+        loaded = res && res.value ? JSON.parse(res.value) : [];
       } catch (e) {
-        setInvoices([]);
+        loaded = [];
       }
+      setInvoices(loaded);
       setLoading(false);
+
+      if (hasSharedFilesPending()) {
+        window.history.replaceState({}, "", window.location.pathname);
+        setBusy(true);
+        try {
+          const sharedFiles = await consumeSharedFiles();
+          if (sharedFiles.length) {
+            const newItems = await buildInvoiceItemsFromFiles(sharedFiles, "");
+            setInvoices((prev) => {
+              const next = [...newItems, ...prev];
+              storage.set("invoices", JSON.stringify(next)).catch(() => {});
+              return next;
+            });
+          }
+        } catch (e) {
+          // ignore - nothing was shared or it failed silently
+        } finally {
+          setBusy(false);
+        }
+      }
     })();
   }, []);
 
@@ -1675,24 +1750,8 @@ function InvoicesView() {
     if (!files.length) return;
     setBusy(true);
     try {
-      const today = fmtDateKey(new Date());
       const defaultFolder = folderFilter !== "all" ? folderFilter : "";
-      const newItems = await Promise.all(
-        files.map(async (f) => {
-          const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
-          const photo = isPdf ? await readFileAsDataURL(f) : await compressImageFile(f);
-          return {
-            id: uid(),
-            type: isPdf ? "pdf" : "image",
-            fileName: isPdf ? f.name : "",
-            photo,
-            date: today,
-            note: "",
-            folder: defaultFolder,
-            paid: false,
-          };
-        })
-      );
+      const newItems = await buildInvoiceItemsFromFiles(files, defaultFolder);
       persist([...newItems, ...invoices]);
     } catch (err) {
       alert("שגיאה בהוספת החשבונית");

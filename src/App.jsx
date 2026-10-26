@@ -100,6 +100,17 @@ function compressImageFile(file, maxDim = 1280, quality = 0.7) {
   });
 }
 
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+}
+
+const INVOICE_FOLDER_SUGGESTIONS = ["שתילים"];
+
 const emptyLog = () => ({
   ownWorkers: 0,
   subcontractors: [],
@@ -1637,7 +1648,8 @@ function InvoicesView() {
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all"); // all | unpaid | paid
-  const [viewerSrc, setViewerSrc] = useState(null);
+  const [folderFilter, setFolderFilter] = useState("all"); // all | <folder name>
+  const [viewer, setViewer] = useState(null); // { src, type }
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -1663,15 +1675,24 @@ function InvoicesView() {
     if (!files.length) return;
     setBusy(true);
     try {
-      const compressed = await Promise.all(files.map((f) => compressImageFile(f)));
       const today = fmtDateKey(new Date());
-      const newItems = compressed.map((photo) => ({
-        id: uid(),
-        photo,
-        date: today,
-        note: "",
-        paid: false,
-      }));
+      const defaultFolder = folderFilter !== "all" ? folderFilter : "";
+      const newItems = await Promise.all(
+        files.map(async (f) => {
+          const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+          const photo = isPdf ? await readFileAsDataURL(f) : await compressImageFile(f);
+          return {
+            id: uid(),
+            type: isPdf ? "pdf" : "image",
+            fileName: isPdf ? f.name : "",
+            photo,
+            date: today,
+            note: "",
+            folder: defaultFolder,
+            paid: false,
+          };
+        })
+      );
       persist([...newItems, ...invoices]);
     } catch (err) {
       alert("שגיאה בהוספת החשבונית");
@@ -1689,10 +1710,16 @@ function InvoicesView() {
     persist(invoices.filter((inv) => inv.id !== id));
   }
 
+  const folderNames = Array.from(
+    new Set(invoices.map((inv) => (inv.folder || "").trim()).filter(Boolean))
+  ).sort();
+  const folderSuggestions = Array.from(new Set([...INVOICE_FOLDER_SUGGESTIONS, ...folderNames]));
+
   const sorted = [...invoices].sort((a, b) => (a.date < b.date ? 1 : -1));
   const filtered = sorted.filter((inv) => {
-    if (filter === "unpaid") return !inv.paid;
-    if (filter === "paid") return !!inv.paid;
+    if (filter === "unpaid" && inv.paid) return false;
+    if (filter === "paid" && !inv.paid) return false;
+    if (folderFilter !== "all" && (inv.folder || "") !== folderFilter) return false;
     return true;
   });
   const unpaidCount = invoices.filter((inv) => !inv.paid).length;
@@ -1705,12 +1732,14 @@ function InvoicesView() {
             ? "אין חשבוניות רשומות"
             : `סה״כ ${invoices.length} חשבוניות · ${unpaidCount} לא שולמו`}
         </div>
+        {folderFilter !== "all" && (
+          <div style={styles.mutedNote}>חשבוניות חדשות ייווספו לתיקיה: {folderFilter}</div>
+        )}
         <label style={styles.addPhotoBtn}>
-          {busy ? "מעלה…" : "+ הוסף חשבונית (צילום)"}
+          {busy ? "מעלה…" : "+ הוסף חשבונית (צילום או PDF)"}
           <input
             type="file"
-            accept="image/*"
-            capture="environment"
+            accept="image/*,application/pdf"
             multiple
             style={{ display: "none" }}
             disabled={busy}
@@ -1740,6 +1769,34 @@ function InvoicesView() {
         </div>
       )}
 
+      {folderSuggestions.length > 0 && (
+        <div className="no-print" style={{ ...styles.filterBar, flexWrap: "wrap" }}>
+          <button
+            style={{
+              ...styles.filterBtn,
+              flex: "unset",
+              ...(folderFilter === "all" ? styles.filterBtnActive : {}),
+            }}
+            onClick={() => setFolderFilter("all")}
+          >
+            כל התיקיות
+          </button>
+          {folderSuggestions.map((name) => (
+            <button
+              key={name}
+              style={{
+                ...styles.filterBtn,
+                flex: "unset",
+                ...(folderFilter === name ? styles.filterBtnActive : {}),
+              }}
+              onClick={() => setFolderFilter(name)}
+            >
+              📁 {name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {loading ? (
         <div style={styles.emptyState}>טוען…</div>
       ) : filtered.length === 0 ? (
@@ -1750,12 +1807,22 @@ function InvoicesView() {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {filtered.map((inv) => (
             <div key={inv.id} style={styles.invoiceCard}>
-              <img
-                src={inv.photo}
-                alt="חשבונית"
-                style={styles.invoiceThumb}
-                onClick={() => setViewerSrc(inv.photo)}
-              />
+              {inv.type === "pdf" ? (
+                <div
+                  style={styles.invoicePdfThumb}
+                  onClick={() => setViewer({ src: inv.photo, type: "pdf" })}
+                >
+                  <div style={{ fontSize: 28 }}>📄</div>
+                  <div style={styles.invoicePdfLabel}>{inv.fileName || "PDF"}</div>
+                </div>
+              ) : (
+                <img
+                  src={inv.photo}
+                  alt="חשבונית"
+                  style={styles.invoiceThumb}
+                  onClick={() => setViewer({ src: inv.photo, type: "image" })}
+                />
+              )}
               <div style={styles.invoiceDetailCol}>
                 <input
                   type="date"
@@ -1768,6 +1835,13 @@ function InvoicesView() {
                   placeholder="ספק / סכום / הערה"
                   value={inv.note}
                   onChange={(e) => updateInvoice(inv.id, { note: e.target.value })}
+                />
+                <input
+                  style={styles.invoiceNoteInput}
+                  placeholder="תיקיה (למשל: שתילים)"
+                  list="invoice-folder-suggestions"
+                  value={inv.folder || ""}
+                  onChange={(e) => updateInvoice(inv.id, { folder: e.target.value })}
                 />
                 <div style={styles.invoiceActionsRow}>
                   <button
@@ -1790,9 +1864,24 @@ function InvoicesView() {
         </div>
       )}
 
-      {viewerSrc && (
-        <div style={styles.invoiceViewerOverlay} onClick={() => setViewerSrc(null)}>
-          <img src={viewerSrc} alt="חשבונית" style={styles.invoiceViewerImg} />
+      <datalist id="invoice-folder-suggestions">
+        {folderSuggestions.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
+
+      {viewer && (
+        <div style={styles.invoiceViewerOverlay} onClick={() => setViewer(null)}>
+          {viewer.type === "pdf" ? (
+            <iframe
+              title="חשבונית PDF"
+              src={viewer.src}
+              style={styles.invoiceViewerFrame}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <img src={viewer.src} alt="חשבונית" style={styles.invoiceViewerImg} />
+          )}
         </div>
       )}
     </div>
@@ -2199,6 +2288,28 @@ const styles = {
     flexShrink: 0,
     cursor: "pointer",
   },
+  invoicePdfThumb: {
+    width: 90,
+    height: 120,
+    borderRadius: 8,
+    border: "1.5px solid #E4E1D8",
+    flexShrink: 0,
+    cursor: "pointer",
+    background: "#FFFDF8",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    padding: 6,
+    textAlign: "center",
+  },
+  invoicePdfLabel: {
+    fontSize: 10.5,
+    color: "#5A5A54",
+    wordBreak: "break-all",
+    lineHeight: 1.3,
+  },
   invoiceDetailCol: {
     flex: 1,
     minWidth: 0,
@@ -2257,6 +2368,15 @@ const styles = {
     maxWidth: "100%",
     maxHeight: "100%",
     borderRadius: 8,
+    boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
+  },
+  invoiceViewerFrame: {
+    width: "100%",
+    maxWidth: 700,
+    height: "90vh",
+    border: "none",
+    borderRadius: 8,
+    background: "#fff",
     boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
   },
   taskRow: {

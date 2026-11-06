@@ -102,6 +102,27 @@ function fmtDateLabel(d) {
 function fmtDateShort(d) {
   return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
 }
+
+// Fills a report's day range with explicit "day off" entries for Saturdays
+// that have no logged data, so they show up in the report instead of being
+// silently skipped. Weekdays with no data are still skipped, as before.
+function buildCalendarRows(days, fromKey, toKey) {
+  const byDate = new Map(days.map((d) => [d.date, d]));
+  const rows = [];
+  let cur = parseDateKey(fromKey);
+  const end = parseDateKey(toKey);
+  while (cur <= end) {
+    const dateKey = fmtDateKey(cur);
+    const existing = byDate.get(dateKey);
+    if (existing) {
+      rows.push({ ...existing, isDayOff: false });
+    } else if (cur.getDay() === 6) {
+      rows.push({ date: dateKey, isDayOff: true });
+    }
+    cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
+  }
+  return rows;
+}
 function isSameDay(a, b) {
   return fmtDateKey(a) === fmtDateKey(b);
 }
@@ -1175,7 +1196,7 @@ function buildReportCSV(report, farmName, rangeFrom, rangeTo) {
     rows.push(["סה\"כ ימי־עבודה, יצאו לקבלן אחר", report.totalSentOut]);
   }
   rows.push([]);
-  if (report.days.length) {
+  if (report.calendarRows.length) {
     rows.push([
       "תאריך",
       "עובדי משק",
@@ -1185,7 +1206,11 @@ function buildReportCSV(report, farmName, rangeFrom, rangeTo) {
       "שעות עבודה",
       "סה\"כ שעות",
     ]);
-    report.days.forEach((day) => {
+    report.calendarRows.forEach((day) => {
+      if (day.isDayOff) {
+        rows.push([fmtDateShort(parseDateKey(day.date)), "יום חופש (שבת)", "", "", "", "", ""]);
+        return;
+      }
       const ownWorkers = Number(day.ownWorkers) || 0;
       const subs = (day.subcontractors || []).filter((s) => (Number(s.count) || 0) > 0);
       const subTotal = subs.reduce((sum, s) => sum + (Number(s.count) || 0), 0);
@@ -1259,9 +1284,13 @@ function buildReportText(report, farmName, rangeFrom, rangeTo) {
     lines.push(`סה"כ ימי־עבודה, יצאו לקבלן אחר: ${report.totalSentOut}`);
   }
   lines.push("");
-  if (report.days.length) {
+  if (report.calendarRows.length) {
     lines.push("נוכחות ושעות עבודה לפי תאריך:");
-    report.days.forEach((day) => {
+    report.calendarRows.forEach((day) => {
+      if (day.isDayOff) {
+        lines.push(`${fmtDateShort(parseDateKey(day.date))} - יום חופש (שבת)`);
+        return;
+      }
       const ownWorkers = Number(day.ownWorkers) || 0;
       const subs = (day.subcontractors || []).filter((s) => (Number(s.count) || 0) > 0);
       const subTotal = subs.reduce((sum, s) => sum + (Number(s.count) || 0), 0);
@@ -1524,6 +1553,7 @@ function ReportsView({ farmName }) {
         })
       );
       const days = entries.filter(Boolean).sort((a, b) => (a.date < b.date ? -1 : 1));
+      const calendarRows = buildCalendarRows(days, fromD, toD);
 
       let totalOwn = 0;
       let totalSub = 0;
@@ -1585,6 +1615,7 @@ function ReportsView({ farmName }) {
 
       setReport({
         days,
+        calendarRows,
         daysCount: days.length,
         totalOwn,
         totalSub,
@@ -1779,7 +1810,7 @@ function ReportsView({ farmName }) {
             )}
           </div>
 
-          {report.days.length > 0 && (
+          {report.calendarRows.length > 0 && (
             <ReportSection title="נוכחות ושעות עבודה לפי תאריך">
               <table style={styles.table}>
                 <thead>
@@ -1794,7 +1825,17 @@ function ReportsView({ farmName }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {report.days.map((day) => {
+                  {report.calendarRows.map((day) => {
+                    if (day.isDayOff) {
+                      return (
+                        <tr key={day.date}>
+                          <td style={styles.td}>{fmtDateShort(parseDateKey(day.date))}</td>
+                          <td style={{ ...styles.td, ...styles.dayOffCell }} colSpan={6}>
+                            יום חופש (שבת)
+                          </td>
+                        </tr>
+                      );
+                    }
                     const ownWorkers = Number(day.ownWorkers) || 0;
                     const subs = (day.subcontractors || []).filter(
                       (s) => (Number(s.count) || 0) > 0
@@ -2938,6 +2979,7 @@ const styles = {
     fontWeight: 600,
   },
   td: { padding: "6px 8px", borderBottom: "1px solid #E7E4DB", color: "#1A1A1A" },
+  dayOffCell: { fontStyle: "italic", color: "#8A8A82", textAlign: "center" },
   tallyRow: {
     display: "flex",
     justifyContent: "space-between",

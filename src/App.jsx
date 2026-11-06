@@ -737,6 +737,8 @@ function DailyLogView({
   const [copyMsg, setCopyMsg] = useState("");
   return (
     <>
+      <TaskSearchCard />
+
       {/* Date navigator */}
       <div className="no-print" style={styles.dateBar}>
         <button style={styles.navBtn} onClick={() => shiftDay(-1)} aria-label="יום קודם">
@@ -1367,20 +1369,7 @@ async function exportFullBackup(farmName) {
 
 // ---------------- Reports ----------------
 
-function ReportsView({ farmName }) {
-  const [rangeFrom, setRangeFrom] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 6);
-    return fmtDateKey(d);
-  });
-  const [rangeTo, setRangeTo] = useState(() => fmtDateKey(new Date()));
-  const [report, setReport] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [copyMsg, setCopyMsg] = useState("");
-  const [pdfBusy, setPdfBusy] = useState(false);
-  const printAreaRef = useRef(null);
-
+function TaskSearchCard() {
   const [taskSearchTerm, setTaskSearchTerm] = useState("");
   const [taskSearchResults, setTaskSearchResults] = useState([]);
   const [taskSearching, setTaskSearching] = useState(false);
@@ -1443,6 +1432,71 @@ function ReportsView({ farmName }) {
       clearTimeout(timer);
     };
   }, [taskSearchTerm]);
+
+  const taskSearchMax = 30;
+  const taskSearchShown = taskSearchResults.slice(0, taskSearchMax);
+
+  return (
+    <div className="no-print" style={styles.card}>
+      <div style={styles.cardHeader}>
+        <span style={{ fontSize: 18 }}>🔍</span>
+        <span style={{ ...styles.cardTitle, color: "#1F7D8C" }}>חיפוש מהיר לפי משימה</span>
+      </div>
+      <div style={{ ...styles.cardAccent, background: "#1F7D8C" }} />
+      <input
+        type="text"
+        style={styles.input}
+        placeholder="לדוגמה: קטיף עגבניות, ריסוס, שם חלקה..."
+        value={taskSearchTerm}
+        onChange={(e) => setTaskSearchTerm(e.target.value)}
+      />
+      {taskSearching && <div style={styles.mutedNote}>מחפש…</div>}
+      {!taskSearching && taskSearchTerm.trim() && (
+        taskSearchResults.length === 0 ? (
+          <div style={styles.emptyState}>לא נמצאו משימות תואמות</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+            {taskSearchShown.map((r, i) => (
+              <div key={i} style={styles.taskRow}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  {fmtDateShort(parseDateKey(r.date))}
+                </div>
+                <div>{r.description || "(ללא תיאור)"}</div>
+                {(r.plots.length > 0 || r.tunnel) && (
+                  <div style={styles.mutedNote}>
+                    {r.plots.length ? `חלקה: ${r.plots.join(", ")}` : ""}
+                    {r.plots.length && r.tunnel ? " · " : ""}
+                    {r.tunnel ? `מנהרה: ${r.tunnel}` : ""}
+                  </div>
+                )}
+                {r.notes && <div style={styles.mutedNote}>הערות: {r.notes}</div>}
+              </div>
+            ))}
+            {taskSearchResults.length > taskSearchMax && (
+              <div style={styles.mutedNote}>
+                ועוד {taskSearchResults.length - taskSearchMax} תוצאות נוספות — צמצמי את החיפוש
+              </div>
+            )}
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+function ReportsView({ farmName }) {
+  const [rangeFrom, setRangeFrom] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    return fmtDateKey(d);
+  });
+  const [rangeTo, setRangeTo] = useState(() => fmtDateKey(new Date()));
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [copyMsg, setCopyMsg] = useState("");
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const printAreaRef = useRef(null);
 
   async function generateReport() {
     setLoading(true);
@@ -1554,56 +1608,8 @@ function ReportsView({ farmName }) {
     }
   }
 
-  const taskSearchMax = 30;
-  const taskSearchShown = taskSearchResults.slice(0, taskSearchMax);
-
   return (
     <div>
-      <div className="no-print" style={styles.card}>
-        <div style={styles.cardHeader}>
-          <span style={{ fontSize: 18 }}>🔍</span>
-          <span style={{ ...styles.cardTitle, color: "#1F7D8C" }}>חיפוש מהיר לפי משימה</span>
-        </div>
-        <div style={{ ...styles.cardAccent, background: "#1F7D8C" }} />
-        <input
-          type="text"
-          style={styles.input}
-          placeholder="לדוגמה: קטיף עגבניות, ריסוס, שם חלקה..."
-          value={taskSearchTerm}
-          onChange={(e) => setTaskSearchTerm(e.target.value)}
-        />
-        {taskSearching && <div style={styles.mutedNote}>מחפש…</div>}
-        {!taskSearching && taskSearchTerm.trim() && (
-          taskSearchResults.length === 0 ? (
-            <div style={styles.emptyState}>לא נמצאו משימות תואמות</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
-              {taskSearchShown.map((r, i) => (
-                <div key={i} style={styles.taskRow}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                    {fmtDateShort(parseDateKey(r.date))}
-                  </div>
-                  <div>{r.description || "(ללא תיאור)"}</div>
-                  {(r.plots.length > 0 || r.tunnel) && (
-                    <div style={styles.mutedNote}>
-                      {r.plots.length ? `חלקה: ${r.plots.join(", ")}` : ""}
-                      {r.plots.length && r.tunnel ? " · " : ""}
-                      {r.tunnel ? `מנהרה: ${r.tunnel}` : ""}
-                    </div>
-                  )}
-                  {r.notes && <div style={styles.mutedNote}>הערות: {r.notes}</div>}
-                </div>
-              ))}
-              {taskSearchResults.length > taskSearchMax && (
-                <div style={styles.mutedNote}>
-                  ועוד {taskSearchResults.length - taskSearchMax} תוצאות נוספות — צמצמי את החיפוש
-                </div>
-              )}
-            </div>
-          )
-        )}
-      </div>
-
       <div className="no-print" style={styles.card}>
         <div style={styles.cardHeader}>
           <span style={{ fontSize: 18 }}>📊</span>

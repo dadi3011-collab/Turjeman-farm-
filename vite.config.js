@@ -43,9 +43,25 @@ export default defineConfig({
             purpose: 'maskable',
           },
         ],
+        share_target: {
+          action: 'share-target/',
+          method: 'POST',
+          enctype: 'multipart/form-data',
+          params: {
+            title: 'title',
+            text: 'text',
+            files: [
+              {
+                name: 'files',
+                accept: ['image/*', 'application/pdf'],
+              },
+            ],
+          },
+        },
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,png,svg,ico}'],
+        importScripts: ['share-target-sw.js'],
       },
     }),
   ],

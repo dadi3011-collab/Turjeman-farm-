@@ -1236,6 +1236,69 @@ function ReportsView({ farmName }) {
   const [pdfBusy, setPdfBusy] = useState(false);
   const printAreaRef = useRef(null);
 
+  const [taskSearchTerm, setTaskSearchTerm] = useState("");
+  const [taskSearchResults, setTaskSearchResults] = useState([]);
+  const [taskSearching, setTaskSearching] = useState(false);
+
+  useEffect(() => {
+    const term = taskSearchTerm.trim();
+    if (!term) {
+      setTaskSearchResults([]);
+      setTaskSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setTaskSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const listRes = await storage.list("log:");
+        const keys = (listRes && listRes.keys) || [];
+        const entries = await Promise.all(
+          keys.map(async (k) => {
+            try {
+              const res = await storage.get(k);
+              return res && res.value
+                ? { date: k.replace("log:", ""), ...JSON.parse(res.value) }
+                : null;
+            } catch (e) {
+              return null;
+            }
+          })
+        );
+        const lowerTerm = term.toLowerCase();
+        const matches = [];
+        entries.filter(Boolean).forEach((day) => {
+          (day.tasks || []).forEach((t) => {
+            const plots = getTaskPlots(t);
+            const haystack = [t.description, ...plots, t.tunnel, t.notes]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
+            if (haystack.includes(lowerTerm)) {
+              matches.push({
+                date: day.date,
+                description: t.description,
+                plots,
+                tunnel: t.tunnel,
+                notes: t.notes,
+              });
+            }
+          });
+        });
+        matches.sort((a, b) => (a.date < b.date ? 1 : -1));
+        if (!cancelled) setTaskSearchResults(matches);
+      } catch (e) {
+        if (!cancelled) setTaskSearchResults([]);
+      } finally {
+        if (!cancelled) setTaskSearching(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [taskSearchTerm]);
+
   async function generateReport() {
     setLoading(true);
     setError("");
@@ -1346,8 +1409,56 @@ function ReportsView({ farmName }) {
     }
   }
 
+  const taskSearchMax = 30;
+  const taskSearchShown = taskSearchResults.slice(0, taskSearchMax);
+
   return (
     <div>
+      <div className="no-print" style={styles.card}>
+        <div style={styles.cardHeader}>
+          <span style={{ fontSize: 18 }}>🔍</span>
+          <span style={{ ...styles.cardTitle, color: "#1F7D8C" }}>חיפוש מהיר לפי משימה</span>
+        </div>
+        <div style={{ ...styles.cardAccent, background: "#1F7D8C" }} />
+        <input
+          type="text"
+          style={styles.input}
+          placeholder="לדוגמה: קטיף עגבניות, ריסוס, שם חלקה..."
+          value={taskSearchTerm}
+          onChange={(e) => setTaskSearchTerm(e.target.value)}
+        />
+        {taskSearching && <div style={styles.mutedNote}>מחפש…</div>}
+        {!taskSearching && taskSearchTerm.trim() && (
+          taskSearchResults.length === 0 ? (
+            <div style={styles.emptyState}>לא נמצאו משימות תואמות</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+              {taskSearchShown.map((r, i) => (
+                <div key={i} style={styles.taskRow}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                    {fmtDateShort(parseDateKey(r.date))}
+                  </div>
+                  <div>{r.description || "(ללא תיאור)"}</div>
+                  {(r.plots.length > 0 || r.tunnel) && (
+                    <div style={styles.mutedNote}>
+                      {r.plots.length ? `חלקה: ${r.plots.join(", ")}` : ""}
+                      {r.plots.length && r.tunnel ? " · " : ""}
+                      {r.tunnel ? `מנהרה: ${r.tunnel}` : ""}
+                    </div>
+                  )}
+                  {r.notes && <div style={styles.mutedNote}>הערות: {r.notes}</div>}
+                </div>
+              ))}
+              {taskSearchResults.length > taskSearchMax && (
+                <div style={styles.mutedNote}>
+                  ועוד {taskSearchResults.length - taskSearchMax} תוצאות נוספות — צמצמי את החיפוש
+                </div>
+              )}
+            </div>
+          )
+        )}
+      </div>
+
       <div className="no-print" style={styles.card}>
         <div style={styles.cardHeader}>
           <span style={{ fontSize: 18 }}>📊</span>

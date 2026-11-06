@@ -33,6 +33,11 @@ const PLOT_OPTIONS = [
   "יעקב",
 ];
 
+function getTaskPlots(t) {
+  if (t.plots && t.plots.length) return t.plots;
+  return t.plot ? [t.plot] : [];
+}
+
 const HE_DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
 const HE_MONTHS = [
   "ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
@@ -199,7 +204,7 @@ function buildDayReportText(farmName, currentDate, log, totalWorkers) {
   if ((log.tasks || []).length) {
     lines.push("משימות שבוצעו:");
     log.tasks.forEach((t) => {
-      lines.push(`- ${t.description || "(ללא תיאור)"} | חלקה: ${t.plot || "-"} | מנהרה: ${t.tunnel || "-"}`);
+      lines.push(`- ${t.description || "(ללא תיאור)"} | חלקה: ${getTaskPlots(t).join(", ") || "-"} | מנהרה: ${t.tunnel || "-"}`);
       if (t.notes && t.notes.trim()) {
         lines.push(`  הערות: ${t.notes.trim()}`);
       }
@@ -452,7 +457,7 @@ export default function FarmDailyLog() {
   // ---- tasks ----
   function addTask() {
     updateLog({
-      tasks: [...log.tasks, { id: uid(), description: "", plot: "", tunnel: "", notes: "" }],
+      tasks: [...log.tasks, { id: uid(), description: "", plots: [], tunnel: "", notes: "" }],
     });
   }
   function updateTask(id, patch) {
@@ -827,19 +832,31 @@ function DailyLogView({
                     value={t.description}
                     onChange={(e) => updateTask(t.id, { description: e.target.value })}
                   />
-                  <div style={styles.taskMetaRow}>
-                    <select
-                      style={styles.taskMetaInput}
-                      value={t.plot}
-                      onChange={(e) => updateTask(t.id, { plot: e.target.value })}
-                    >
-                      <option value="">חלקה</option>
-                      {PLOT_OPTIONS.map((p) => (
-                        <option key={p} value={p}>
+                  <div style={styles.taskPlotChipsWrap}>
+                    {PLOT_OPTIONS.map((p) => {
+                      const selected = getTaskPlots(t).includes(p);
+                      return (
+                        <button
+                          key={p}
+                          type="button"
+                          style={{
+                            ...styles.taskPlotChip,
+                            ...(selected ? styles.taskPlotChipActive : {}),
+                          }}
+                          onClick={() => {
+                            const current = getTaskPlots(t);
+                            const next = selected
+                              ? current.filter((x) => x !== p)
+                              : [...current, p];
+                            updateTask(t.id, { plots: next });
+                          }}
+                        >
                           {p}
-                        </option>
-                      ))}
-                    </select>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={styles.taskMetaRow}>
                     <input
                       style={styles.taskMetaInput}
                       placeholder="מס׳ מנהרה"
@@ -1060,7 +1077,7 @@ function buildReportCSV(report, farmName, rangeFrom, rangeTo) {
   if (report.taskList.length) {
     rows.push(["תאריך", "תיאור משימה", "חלקה", "מנהרה", "הערות"]);
     report.taskList.forEach((t) =>
-      rows.push([fmtDateShort(parseDateKey(t.date)), t.description, t.plot, t.tunnel, t.notes])
+      rows.push([fmtDateShort(parseDateKey(t.date)), t.description, getTaskPlots(t).join("; "), t.tunnel, t.notes])
     );
     rows.push([]);
   }
@@ -1138,7 +1155,7 @@ function buildReportText(report, farmName, rangeFrom, rangeTo) {
     lines.push(`משימות שבוצעו (${report.taskList.length}):`);
     report.taskList.slice(0, maxItems).forEach((t) => {
       lines.push(
-        `${fmtDateShort(parseDateKey(t.date))} - ${t.description || "(ללא תיאור)"} | חלקה: ${t.plot || "-"} | מנהרה: ${t.tunnel || "-"}${t.notes ? ` | הערות: ${t.notes}` : ""}`
+        `${fmtDateShort(parseDateKey(t.date))} - ${t.description || "(ללא תיאור)"} | חלקה: ${getTaskPlots(t).join(", ") || "-"} | מנהרה: ${t.tunnel || "-"}${t.notes ? ` | הערות: ${t.notes}` : ""}`
       );
     });
     if (report.taskList.length > maxItems) {
@@ -1284,9 +1301,12 @@ function ReportsView({ farmName }) {
           }
         });
         (day.tasks || []).forEach((t) => {
-          if (!t.description && !t.plot && !t.tunnel && !t.notes) return;
-          taskList.push({ date: day.date, ...t });
-          if (t.plot) plotCounts[t.plot] = (plotCounts[t.plot] || 0) + 1;
+          const plots = getTaskPlots(t);
+          if (!t.description && !plots.length && !t.tunnel && !t.notes) return;
+          taskList.push({ date: day.date, ...t, plots });
+          plots.forEach((p) => {
+            plotCounts[p] = (plotCounts[p] || 0) + 1;
+          });
           if (t.tunnel) tunnelCounts[t.tunnel] = (tunnelCounts[t.tunnel] || 0) + 1;
         });
         if (day.irrigationNotes && day.irrigationNotes.trim()) {
@@ -1616,7 +1636,7 @@ function ReportsView({ farmName }) {
                     <tr key={i}>
                       <td style={styles.td}>{fmtDateShort(parseDateKey(t.date))}</td>
                       <td style={styles.td}>{t.description}</td>
-                      <td style={styles.td}>{t.plot}</td>
+                      <td style={styles.td}>{(t.plots || []).join(", ")}</td>
                       <td style={styles.td}>{t.tunnel}</td>
                       <td style={styles.td}>{t.notes}</td>
                     </tr>
@@ -2453,6 +2473,26 @@ const styles = {
     background: "#FFFDF8",
     color: "#1A1A1A",
     marginBottom: 8,
+  },
+  taskPlotChipsWrap: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 6,
+    marginBottom: 8,
+  },
+  taskPlotChip: {
+    padding: "6px 11px",
+    borderRadius: 16,
+    border: "1.5px solid #E4E1D8",
+    background: "#FFFDF8",
+    color: "#5A5A54",
+    fontSize: 12.5,
+    fontWeight: 500,
+  },
+  taskPlotChipActive: {
+    background: "#3C7A43",
+    borderColor: "#3C7A43",
+    color: "#FFFDF8",
   },
   taskMetaRow: { display: "flex", gap: 8 },
   taskMetaInput: {
